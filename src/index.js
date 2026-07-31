@@ -179,7 +179,18 @@ function getCurrentStatus(embed) {
 }
 
 function getAssignedEmployeeId(embed) {
-  return getFieldValue(embed, '👨‍🍳 Employé').match(/<@(\d+)>/)?.[1] || '';
+  const footerText = embed.footer?.text || '';
+  return footerText.match(/employee_id:(\d+)/)?.[1] || '';
+}
+
+function getEmployeeDisplayName(interaction) {
+  return cleanText(
+    interaction.member?.displayName ||
+      interaction.user.globalName ||
+      interaction.user.username,
+    'Employé',
+    80,
+  );
 }
 
 app.get('/', (_request, response) => {
@@ -282,7 +293,7 @@ client.on('interactionCreate', async (interaction) => {
       !interaction.memberPermissions?.has(PermissionFlagsBits.ManageMessages)
     ) {
       await interaction.reply({
-        content: `Cette commande est déjà gérée par <@${assignedEmployeeId}>.`,
+        content: 'Cette commande est déjà prise en charge par un autre employé.',
         ephemeral: true,
       });
       return;
@@ -312,22 +323,27 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     const embed = EmbedBuilder.from(currentEmbedData).setColor(nextStatus.color);
+    const employeeId = assignedEmployeeId || interaction.user.id;
+    const employeeName = getEmployeeDisplayName(interaction);
+
     replaceField(embed, '📌 Statut', `${nextStatus.emoji} ${nextStatus.label}`, true);
-    replaceField(embed, '👨‍🍳 Employé', `<@${assignedEmployeeId || interaction.user.id}>`, true);
+    replaceField(embed, '👨‍🍳 Employé', employeeName, true);
     replaceField(
       embed,
       '🕘 Dernière action',
-      `${nextStatus.emoji} ${nextStatus.label} par <@${interaction.user.id}>`,
+      `${nextStatus.emoji} ${nextStatus.label} par ${employeeName}`,
       false,
     );
 
+    embed.setFooter({
+      text: `Roxwood Pizzeria • Gestion des commandes • employee_id:${employeeId}`,
+    });
+
     await interaction.update({
-  embeds: [embed],
-  components: buildButtons(orderNumber, nextStatusKey),
-  allowedMentions: {
-    users: [interaction.user.id],
-  },
-});
+      embeds: [embed],
+      components: buildButtons(orderNumber, nextStatusKey),
+      allowedMentions: { parse: [] },
+    });
   } catch (error) {
     console.error('Erreur interaction bouton :', error);
 
