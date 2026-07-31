@@ -322,10 +322,12 @@ client.on('interactionCreate', async (interaction) => {
     );
 
     await interaction.update({
-      embeds: [embed],
-      components: buildButtons(orderNumber, nextStatusKey),
-      allowedMentions: { parse: [] },
-    });
+  embeds: [embed],
+  components: buildButtons(orderNumber, nextStatusKey),
+  allowedMentions: {
+    users: [interaction.user.id],
+  },
+});
   } catch (error) {
     console.error('Erreur interaction bouton :', error);
 
