@@ -22,6 +22,7 @@ const config = {
   ordersChannelId: process.env.ORDERS_CHANNEL_ID.trim(),
   apiSecret: process.env.API_SECRET.trim(),
   employeeRoleId: process.env.EMPLOYEE_ROLE_ID?.trim() || '',
+  archiveChannelId: process.env.ARCHIVE_CHANNEL_ID?.trim() || '',
   port: Number(process.env.PORT || 3000),
 };
 
@@ -227,10 +228,19 @@ app.post('/api/orders', async (request, response) => {
     }
 
     const orderNumber = cleanText(request.body.orderNumber, '', 60);
+    const employeeMention = config.employeeRoleId
+      ? `<@&${config.employeeRoleId}>`
+      : '';
+
     const message = await channel.send({
+      content: employeeMention
+        ? `${employeeMention} 🍕 Une nouvelle commande vient d’arriver.`
+        : '🍕 Une nouvelle commande vient d’arriver.',
       embeds: [buildOrderEmbed(request.body)],
       components: buildButtons(orderNumber, 'waiting'),
-      allowedMentions: { parse: [] },
+      allowedMentions: config.employeeRoleId
+        ? { roles: [config.employeeRoleId] }
+        : { parse: [] },
     });
 
     return response.status(201).json({
@@ -246,6 +256,41 @@ app.post('/api/orders', async (request, response) => {
     });
   }
 });
+
+async function archiveCompletedOrder(interaction, embed) {
+  if (!config.archiveChannelId) {
+    console.warn(
+      'ARCHIVE_CHANNEL_ID non configuré : la commande terminée reste dans le salon actuel.',
+    );
+    return false;
+  }
+
+  const archiveChannel = await client.channels.fetch(config.archiveChannelId);
+
+  if (!archiveChannel?.isTextBased()) {
+    throw new Error('Le salon d’archives est introuvable ou invalide.');
+  }
+
+  const archivedEmbed = EmbedBuilder.from(embed);
+
+  replaceField(
+    archivedEmbed,
+    '📁 Archivage',
+    `Commande archivée le ${new Date().toLocaleString('fr-FR', {
+      timeZone: 'Europe/Paris',
+    })}`,
+    false,
+  );
+
+  await archiveChannel.send({
+    content: '✅ Commande terminée et archivée.',
+    embeds: [archivedEmbed],
+    allowedMentions: { parse: [] },
+  });
+
+  await interaction.message.delete();
+  return true;
+}
 
 client.once('ready', (readyClient) => {
   console.log(`Bot connecté : ${readyClient.user.tag}`);
@@ -344,6 +389,20 @@ client.on('interactionCreate', async (interaction) => {
       components: buildButtons(orderNumber, nextStatusKey),
       allowedMentions: { parse: [] },
     });
+
+    if (nextStatusKey === 'completed') {
+      try {
+        await archiveCompletedOrder(interaction, embed);
+      } catch (archiveError) {
+        console.error('Erreur archivage commande :', archiveError);
+
+        await interaction.followUp({
+          content:
+            '⚠️ La commande est marquée comme effectuée, mais son archivage a échoué. Vérifie le salon d’archives et les permissions du bot.',
+          ephemeral: true,
+        });
+      }
+    }
   } catch (error) {
     console.error('Erreur interaction bouton :', error);
 
