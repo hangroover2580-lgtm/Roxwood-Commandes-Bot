@@ -28,6 +28,12 @@ const config = {
     process.env.APPS_SCRIPT_CALLBACK_URL?.trim().replace(/\/+$/, '') || '',
   appsScriptCallbackSecret:
     process.env.APPS_SCRIPT_CALLBACK_SECRET?.trim() || '',
+  companyName: process.env.COMPANY_NAME?.trim() || 'Roxwood Pizzeria',
+  brandColor: Number.parseInt(
+    process.env.BRAND_COLOR?.replace('#', '') || 'B51F24',
+    16,
+  ),
+  logoUrl: process.env.BRAND_LOGO_URL?.trim() || '',
   port: Number(process.env.PORT || 3000),
 };
 
@@ -114,43 +120,110 @@ function buildButtons(orderNumber, status = 'waiting') {
   return [new ActionRowBuilder().addComponents(claim, preparing, delivery, completed, cancelled)];
 }
 
+
+function brandAuthor() {
+  const author = { name: config.companyName };
+  if (config.logoUrl) author.iconURL = config.logoUrl;
+  return author;
+}
+
+function cleanLines(value, maxLines = 16) {
+  return String(value || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim().replace(/^[-•✨🔧🚀]\s*/, ''))
+    .filter(Boolean)
+    .slice(0, maxLines);
+}
+
+function bulletList(value, fallback = 'Aucun élément renseigné.') {
+  const lines = cleanLines(value);
+  return lines.length ? lines.map((line) => `• ${line}`).join('\n') : fallback;
+}
+
+function safeField(value, fallback = 'Non renseigné', max = 1024) {
+  return cleanText(value, fallback, max);
+}
+
 function buildOrderEmbed(order) {
-  const itemsText = cleanItems(order.items)
-    .map((item) => `• **${item.quantity} × ${item.name}** — ${formatMoney(item.quantity * item.price)}`)
-    .join('\n')
-    .slice(0, 4000);
+  const items = cleanItems(order.items);
+  const itemsText = items.length
+    ? items
+        .slice(0, 20)
+        .map(
+          (item) =>
+            `**${item.quantity} × ${item.name}**\n${formatMoney(
+              item.quantity * item.price,
+            )}`,
+        )
+        .join('\n\n')
+        .slice(0, 4000)
+    : 'Aucun article renseigné.';
 
-  const status = STATUS.waiting;
-
-  return new EmbedBuilder()
-    .setTitle(`🍕 Commande #${cleanText(order.orderNumber, 'Inconnue', 60)}`)
+  const isProfessional = order.customerType === 'professional';
+  const embed = new EmbedBuilder()
+    .setAuthor(brandAuthor())
+    .setTitle(`Commande ${cleanText(order.orderNumber, 'Inconnue', 60)}`)
     .setDescription(itemsText)
-    .setColor(status.color)
+    .setColor(config.brandColor)
     .addFields(
       {
-        name: '🏷️ Type',
-        value: order.customerType === 'professional' ? 'Commande entreprise' : 'Commande citoyen',
+        name: 'Type de commande',
+        value: isProfessional
+          ? `Commande entreprise\n${safeField(order.companyName)}`
+          : 'Commande citoyen',
         inline: true,
       },
       {
-        name: '🏢 Entreprise',
-        value: order.customerType === 'professional' ? cleanText(order.companyName) : 'Non concerné',
+        name: 'Client',
+        value: safeField(order.customerName),
         inline: true,
       },
-      { name: '👤 Client', value: cleanText(order.customerName), inline: true },
-      { name: '💬 Discord', value: cleanText(order.discordUsername), inline: true },
-      { name: '📞 Téléphone RP', value: cleanText(order.phone), inline: true },
-      { name: '📦 Mode', value: cleanText(order.orderType), inline: true },
-      { name: '📅 Date souhaitée', value: cleanText(order.requestedDate), inline: true },
-      { name: '🕒 Heure souhaitée', value: cleanText(order.requestedTime), inline: true },
-      { name: '📍 Adresse RP', value: cleanText(order.address), inline: false },
-      { name: '💵 Total', value: `**${formatMoney(order.total)}**`, inline: true },
-      { name: '📌 Statut', value: `${status.emoji} ${status.label}`, inline: true },
-      { name: '👨‍🍳 Employé', value: 'Aucun', inline: true },
-      { name: '📝 Commentaire', value: cleanText(order.notes, 'Aucun commentaire'), inline: false },
+      {
+        name: 'Montant',
+        value: `**${formatMoney(order.total)}**`,
+        inline: true,
+      },
+      {
+        name: 'Contact',
+        value:
+          `Discord : ${safeField(order.discordUsername)}\n` +
+          `Téléphone RP : ${safeField(order.phone)}`,
+        inline: true,
+      },
+      {
+        name: 'Retrait / livraison',
+        value:
+          `${safeField(order.orderType)}\n` +
+          `${safeField(order.requestedDate)} à ${safeField(
+            order.requestedTime,
+          )}`,
+        inline: true,
+      },
+      {
+        name: 'Adresse RP',
+        value: safeField(order.address),
+        inline: true,
+      },
+      {
+        name: 'Suivi',
+        value: 'En attente de prise en charge',
+        inline: false,
+      },
+      {
+        name: 'Employé en charge',
+        value: 'Aucun',
+        inline: true,
+      },
     )
-    .setFooter({ text: 'Roxwood Pizzeria • Gestion des commandes' })
+    .setFooter({
+      text: `${config.companyName} • Gestion des commandes`,
+    })
     .setTimestamp();
+
+  const notes = cleanText(order.notes, '', 900);
+  if (notes) embed.addFields({ name: 'Commentaire du client', value: notes });
+  if (config.logoUrl) embed.setThumbnail(config.logoUrl);
+  return embed;
 }
 
 function getFieldValue(embed, fieldName) {
@@ -180,7 +253,7 @@ function hasEmployeeAccess(interaction) {
 }
 
 function getCurrentStatus(embed) {
-  const value = getFieldValue(embed, '📌 Statut');
+  const value = getFieldValue(embed, 'Suivi') || getFieldValue(embed, 'Suivi');
   return Object.entries(STATUS).find(([, status]) => value.includes(status.label))?.[0] || 'waiting';
 }
 
@@ -218,45 +291,58 @@ function normalizePatchLines(value, prefix) {
 }
 
 function buildPatchNoteEmbed(patch) {
+  const category = cleanText(
+    patch.category,
+    'Mise à jour générale',
+    60,
+  );
+  const colors = {
+    Site: 0x5865f2,
+    Bot: 0x2b2d31,
+    Comptabilité: 0x2f6b42,
+    Correctif: 0xd9822b,
+    'Mise à jour globale': config.brandColor,
+  };
+
   const embed = new EmbedBuilder()
-    .setTitle(`🍕 Roxwood Pizzeria — ${cleanText(patch.version, 'Nouvelle version', 40)}`)
-    .setDescription(`**${cleanText(patch.title, 'Mise à jour', 120)}**`)
-    .setColor(0xB51F24)
+    .setAuthor(brandAuthor())
+    .setTitle(
+      `${cleanText(patch.version, 'Nouvelle version', 40)} — ` +
+        `${cleanText(patch.title, 'Mise à jour', 120)}`,
+    )
+    .setDescription(
+      `Une nouvelle version de **${config.companyName}** est disponible.`,
+    )
+    .setColor(colors[category] || config.brandColor)
     .addFields(
+      { name: 'Catégorie', value: category, inline: true },
       {
-        name: '🏷️ Catégorie',
-        value: cleanText(patch.category, 'Mise à jour globale', 60),
-        inline: true,
-      },
-      {
-        name: '👤 Publié par',
+        name: 'Publication',
         value: cleanText(patch.author, 'Administration', 80),
         inline: true,
       },
     )
     .setFooter({
-      text: 'Roxwood Pizzeria • Patch Notes officielles',
+      text: `${config.companyName} • Notes de version officielles`,
     })
     .setTimestamp(
       patch.publishedAt ? new Date(patch.publishedAt) : new Date(),
     );
 
-  const newFeatures = normalizePatchLines(patch.newFeatures, '✨');
-  const fixes = normalizePatchLines(patch.fixes, '🔧');
-  const improvements = normalizePatchLines(patch.improvements, '🚀');
-
-  if (newFeatures) {
-    embed.addFields({ name: 'Nouveautés', value: newFeatures });
+  for (const [title, content] of [
+    ['Nouveautés', patch.newFeatures],
+    ['Correctifs', patch.fixes],
+    ['Améliorations', patch.improvements],
+  ]) {
+    if (cleanLines(content).length) {
+      embed.addFields({
+        name: title,
+        value: bulletList(content).slice(0, 1024),
+      });
+    }
   }
 
-  if (fixes) {
-    embed.addFields({ name: 'Correctifs', value: fixes });
-  }
-
-  if (improvements) {
-    embed.addFields({ name: 'Améliorations', value: improvements });
-  }
-
+  if (config.logoUrl) embed.setThumbnail(config.logoUrl);
   return embed;
 }
 
@@ -456,7 +542,14 @@ async function archiveCompletedOrder(interaction, embed) {
     throw new Error('Le salon d’archives est introuvable ou invalide.');
   }
 
-  const archivedEmbed = EmbedBuilder.from(embed);
+  const archivedEmbed = EmbedBuilder.from(embed)
+    .setAuthor(brandAuthor())
+    .setTitle(`${embed.data.title || 'Commande'} — Archivée`)
+    .setColor(0x2f6b42)
+    .setFooter({
+      text: `${config.companyName} • Commande finalisée et archivée`,
+    })
+    .setTimestamp();
 
   replaceField(
     archivedEmbed,
@@ -619,11 +712,11 @@ client.on('interactionCreate', async (interaction) => {
     const employeeId = assignedEmployeeId || interaction.user.id;
     const employeeName = getEmployeeDisplayName(interaction);
 
-    replaceField(embed, '📌 Statut', `${nextStatus.emoji} ${nextStatus.label}`, true);
-    replaceField(embed, '👨‍🍳 Employé', employeeName, true);
+    replaceField(embed, 'Suivi', nextStatus.label, true);
+    replaceField(embed, 'Employé en charge', employeeName, true);
     replaceField(
       embed,
-      '🕘 Dernière action',
+      'Dernière mise à jour',
       `${nextStatus.emoji} ${nextStatus.label} par ${employeeName}`,
       false,
     );
