@@ -24,6 +24,10 @@ const config = {
   employeeRoleId: process.env.EMPLOYEE_ROLE_ID?.trim() || '',
   archiveChannelId: process.env.ARCHIVE_CHANNEL_ID?.trim() || '',
   patchNotesChannelId: process.env.PATCH_NOTES_CHANNEL_ID?.trim() || '',
+  appsScriptCallbackUrl:
+    process.env.APPS_SCRIPT_CALLBACK_URL?.trim().replace(/\/+$/, '') || '',
+  appsScriptCallbackSecret:
+    process.env.APPS_SCRIPT_CALLBACK_SECRET?.trim() || '',
   port: Number(process.env.PORT || 3000),
 };
 
@@ -319,6 +323,125 @@ app.post('/api/orders', async (request, response) => {
   }
 });
 
+
+function parseMoneyValue(value) {
+  const normalized = String(value || '')
+    .replace(/\s/g, '')
+    .replace(/[^\d,.-]/g, '')
+    .replace(',', '.');
+
+  const amount = Number(normalized);
+  return Number.isFinite(amount) ? amount : 0;
+}
+
+function parseOrderItemsFromEmbed(embed) {
+  const description = String(embed.description || '');
+
+  return description
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .map(line => {
+      const match = line.match(
+        /^•\s+\*\*(\d+)\s+×\s+(.+?)\*\*\s+—\s+(.+)$/,
+      );
+
+      if (!match) {
+        return null;
+      }
+
+      const quantity = Math.max(1, Number(match[1]) || 1);
+      const lineTotal = parseMoneyValue(match[3]);
+
+      return {
+        name: cleanText(match[2], 'Produit', 100),
+        quantity,
+        price: quantity > 0 ? lineTotal / quantity : lineTotal,
+        lineTotal,
+      };
+    })
+    .filter(Boolean);
+}
+
+function extractOrderNumber(embed) {
+  const title = String(embed.title || '');
+  return title.match(/Commande\s+#(.+)$/i)?.[1]?.trim() || '';
+}
+
+async function syncCompletedOrderToAccounting(interaction, embed, employeeName) {
+  if (!config.appsScriptCallbackUrl || !config.appsScriptCallbackSecret) {
+    throw new Error(
+      'La connexion à la comptabilité n’est pas configurée dans Railway.',
+    );
+  }
+
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 15_000);
+
+  const payload = {
+    action: 'complete_order',
+    secret: config.appsScriptCallbackSecret,
+    order: {
+      orderNumber: extractOrderNumber(embed),
+      completedAt: new Date().toISOString(),
+      customerType: getFieldValue(embed, '🏷️ Type'),
+      companyName: getFieldValue(embed, '🏢 Entreprise'),
+      customerName: getFieldValue(embed, '👤 Client'),
+      discordUsername: getFieldValue(embed, '💬 Discord'),
+      phone: getFieldValue(embed, '📞 Téléphone RP'),
+      orderType: getFieldValue(embed, '📦 Mode'),
+      requestedDate: getFieldValue(embed, '📅 Date souhaitée'),
+      requestedTime: getFieldValue(embed, '🕒 Heure souhaitée'),
+      address: getFieldValue(embed, '📍 Adresse RP'),
+      employeeName,
+      total: parseMoneyValue(getFieldValue(embed, '💵 Total')),
+      notes: getFieldValue(embed, '📝 Commentaire'),
+      items: parseOrderItemsFromEmbed(embed),
+      discordMessageId: interaction.message.id,
+      discordChannelId: interaction.channelId,
+    },
+  };
+
+  try {
+    const response = await fetch(config.appsScriptCallbackUrl, {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+      },
+      body: JSON.stringify(payload),
+      signal: controller.signal,
+    });
+
+    const responseText = await response.text();
+    let result = {};
+
+    try {
+      result = JSON.parse(responseText);
+    } catch {
+      result = {};
+    }
+
+    if (!response.ok || result.ok !== true) {
+      throw new Error(
+        result.error ||
+          `La comptabilité a refusé la commande (HTTP ${response.status}).`,
+      );
+    }
+
+    return result;
+  } catch (error) {
+    if (error?.name === 'AbortError') {
+      throw new Error(
+        'La comptabilité n’a pas répondu dans le délai prévu.',
+      );
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 async function archiveCompletedOrder(interaction, embed) {
   if (!config.archiveChannelId) {
     console.warn(
@@ -509,13 +632,37 @@ client.on('interactionCreate', async (interaction) => {
       text: `Roxwood Pizzeria • Gestion des commandes • employee_id:${employeeId}`,
     });
 
-    await interaction.update({
-      embeds: [embed],
-      components: buildButtons(orderNumber, nextStatusKey),
-      allowedMentions: { parse: [] },
-    });
-
     if (nextStatusKey === 'completed') {
+      await interaction.deferUpdate();
+
+      try {
+        await syncCompletedOrderToAccounting(
+          interaction,
+          embed,
+          employeeName,
+        );
+      } catch (accountingError) {
+        console.error(
+          'Erreur synchronisation comptabilité :',
+          accountingError,
+        );
+
+        await interaction.followUp({
+          content:
+            `❌ Impossible de terminer la commande : ${accountingError.message}\n` +
+            'La commande reste dans le salon de gestion afin de ne pas perdre la recette.',
+          ephemeral: true,
+        });
+
+        return;
+      }
+
+      await interaction.editReply({
+        embeds: [embed],
+        components: buildButtons(orderNumber, nextStatusKey),
+        allowedMentions: { parse: [] },
+      });
+
       try {
         await archiveCompletedOrder(interaction, embed);
       } catch (archiveError) {
@@ -523,11 +670,19 @@ client.on('interactionCreate', async (interaction) => {
 
         await interaction.followUp({
           content:
-            '⚠️ La commande est marquée comme effectuée, mais son archivage a échoué. Vérifie le salon d’archives et les permissions du bot.',
+            '⚠️ La recette a bien été enregistrée, mais l’archivage Discord a échoué. Vérifie le salon d’archives et les permissions du bot.',
           ephemeral: true,
         });
       }
+
+      return;
     }
+
+    await interaction.update({
+      embeds: [embed],
+      components: buildButtons(orderNumber, nextStatusKey),
+      allowedMentions: { parse: [] },
+    });
   } catch (error) {
     console.error('Erreur interaction bouton :', error);
 
