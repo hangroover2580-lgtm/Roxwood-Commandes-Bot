@@ -617,55 +617,92 @@ async function archiveCompletedOrder(interaction, embed) {
     console.warn(
       'ARCHIVE_CHANNEL_ID non configuré : la commande terminée reste dans le salon actuel.',
     );
-    return false;
+
+    return {
+      success: false,
+      reason: 'ARCHIVE_CHANNEL_ID non configuré.',
+    };
   }
-
-  const archiveChannel = await client.channels.fetch(config.archiveChannelId);
-
-  if (!archiveChannel?.isTextBased()) {
-    throw new Error('Le salon d’archives est introuvable ou invalide.');
-  }
-
-  const archivedEmbed = EmbedBuilder.from(embed)
-    .setAuthor(brandAuthor())
-    .setTitle(`${String(embed.data.title || 'Commande').replace(/^🍕\s*/, '')} — Terminée`)
-    .setColor(0x2f6b42)
-    .setFooter({
-      text: `${config.companyName} • Archive des commandes`,
-    })
-    .setTimestamp();
-
-  replaceField(
-    archivedEmbed,
-    '📁 Archivage',
-    `Commande archivée le ${new Date().toLocaleString('fr-FR', {
-      timeZone: 'Europe/Paris',
-    })}`,
-    false,
-  );
-
-  await archiveChannel.send({
-    content: '✅ Commande terminée et archivée.',
-    embeds: [archivedEmbed],
-    allowedMentions: { parse: [] },
-  });
 
   try {
-    await interaction.deleteReply();
-  } catch (deleteError) {
-    const errorCode = Number(deleteError?.code || 0);
+    const archiveChannel = await client.channels.fetch(
+      config.archiveChannelId,
+    );
 
-    if (errorCode !== 10008) {
-      console.warn(
-        'Archive créée, mais suppression du message original impossible :',
-        deleteError,
-      );
+    if (!archiveChannel?.isTextBased()) {
+      return {
+        success: false,
+        reason: 'Le salon d’archives est introuvable ou invalide.',
+      };
     }
+
+    const archivedEmbed = EmbedBuilder.from(embed)
+      .setAuthor(brandAuthor())
+      .setTitle(
+        `${String(embed.data.title || 'Commande')
+          .replace(/^🍕\s*/, '')} — Terminée`,
+      )
+      .setColor(0x2f6b42)
+      .setFooter({
+        text: `${config.companyName} • Archive des commandes`,
+      })
+      .setTimestamp();
+
+    replaceField(
+      archivedEmbed,
+      '📁 Archivage',
+      `Commande archivée le ${new Date().toLocaleString('fr-FR', {
+        timeZone: 'Europe/Paris',
+      })}`,
+      false,
+    );
+
+    const archivedMessage = await archiveChannel.send({
+      content: '✅ Commande terminée et archivée.',
+      embeds: [archivedEmbed],
+      allowedMentions: { parse: [] },
+    });
+
+    if (!archivedMessage?.id) {
+      return {
+        success: false,
+        reason: 'Discord n’a pas confirmé la création de l’archive.',
+      };
+    }
+
+    // À partir d’ici, l’archive est définitivement considérée comme réussie.
+    // La suppression du message d’origine ne doit jamais changer ce résultat.
+    interaction.message
+      .delete()
+      .catch((deleteError) => {
+        const errorCode = Number(deleteError?.code || 0);
+
+        if (errorCode !== 10008) {
+          console.warn(
+            'Archive créée, mais suppression du message original impossible :',
+            deleteError,
+          );
+        }
+      });
+
+    return {
+      success: true,
+      archivedMessageId: archivedMessage.id,
+    };
+  } catch (archiveError) {
+    console.error(
+      'Échec réel de l’envoi dans le salon d’archives :',
+      archiveError,
+    );
+
+    return {
+      success: false,
+      reason:
+        archiveError?.message ||
+        'Erreur inconnue pendant l’envoi de l’archive.',
+    };
   }
-
-  return true;
 }
-
 
 app.post('/api/patch-notes', async (request, response) => {
   try {
@@ -851,14 +888,16 @@ client.on('interactionCreate', async (interaction) => {
         allowedMentions: { parse: [] },
       });
 
-      try {
-        await archiveCompletedOrder(interaction, embed);
-      } catch (archiveError) {
-        console.error('Erreur archivage commande :', archiveError);
+      const archiveResult = await archiveCompletedOrder(
+        interaction,
+        embed,
+      );
 
+      if (!archiveResult.success) {
         await interaction.followUp({
           content:
-            '⚠️ La recette a bien été enregistrée, mais l’archivage Discord a échoué. Vérifie le salon d’archives et les permissions du bot.',
+            '⚠️ La recette a bien été enregistrée, mais l’envoi dans le salon ' +
+            `d’archives a réellement échoué : ${archiveResult.reason}`,
           ephemeral: true,
         });
       }
