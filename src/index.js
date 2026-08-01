@@ -34,6 +34,10 @@ const config = {
     16,
   ),
   logoUrl: process.env.BRAND_LOGO_URL?.trim() || '',
+  stockAlertsChannelId:
+    process.env.STOCK_ALERTS_CHANNEL_ID?.trim() || '',
+  reportsChannelId:
+    process.env.REPORTS_CHANNEL_ID?.trim() || '',
   port: Number(process.env.PORT || 3000),
 };
 
@@ -343,6 +347,60 @@ function normalizePatchLines(value, prefix) {
     .slice(0, 1000);
 }
 
+
+function buildStockAlertEmbed(orderNumber, lowStock) {
+  const lines = lowStock
+    .slice(0, 20)
+    .map(
+      (item) =>
+        `**${cleanText(item.ingredient, 'Article', 80)}** — ` +
+        `${item.remaining} ${cleanText(item.unit, '', 20)} restants ` +
+        `(seuil : ${item.threshold})`,
+    )
+    .join('\n');
+
+  const embed = new EmbedBuilder()
+    .setAuthor(brandAuthor())
+    .setTitle('⚠️ Alerte de stock')
+    .setDescription(
+      `Une commande a fait passer certains articles sous leur seuil d’alerte.\n\n${lines}`,
+    )
+    .setColor(0xd9822b)
+    .addFields({
+      name: 'Commande concernée',
+      value: cleanText(orderNumber, 'Inconnue', 80),
+      inline: true,
+    })
+    .setFooter({
+      text: `${config.companyName} • Gestion des stocks`,
+    })
+    .setTimestamp();
+
+  if (config.logoUrl) embed.setThumbnail(config.logoUrl);
+  return embed;
+}
+
+async function sendStockAlert(orderNumber, lowStock) {
+  if (!config.stockAlertsChannelId || !Array.isArray(lowStock) || !lowStock.length) {
+    return;
+  }
+
+  try {
+    const channel = await client.channels.fetch(
+      config.stockAlertsChannelId,
+    );
+
+    if (!channel?.isTextBased()) return;
+
+    await channel.send({
+      embeds: [buildStockAlertEmbed(orderNumber, lowStock)],
+      allowedMentions: { parse: [] },
+    });
+  } catch (error) {
+    console.error('Erreur envoi alerte stock :', error);
+  }
+}
+
 function buildPatchNoteEmbed(patch) {
   const category = cleanText(
     patch.category,
@@ -598,6 +656,13 @@ async function syncCompletedOrderToAccounting(interaction, embed, employeeName) 
       );
     }
 
+    if (result?.result?.stock?.lowStock?.length) {
+      await sendStockAlert(
+        orderNumber,
+        result.result.stock.lowStock,
+      );
+    }
+
     return result;
   } catch (error) {
     if (error?.name === 'AbortError') {
@@ -762,6 +827,65 @@ app.post('/api/patch-notes', async (request, response) => {
     return response.status(500).json({
       ok: false,
       error: 'Erreur interne lors de la publication de la patch note.',
+    });
+  }
+});
+
+
+app.post('/api/reports/daily', async (request, response) => {
+  try {
+    if ((request.get('authorization') || '') !== `Bearer ${config.apiSecret}`) {
+      return response.status(401).json({ ok: false, error: 'Accès refusé.' });
+    }
+
+    if (!config.reportsChannelId) {
+      return response.status(500).json({
+        ok: false,
+        error: 'REPORTS_CHANNEL_ID n’est pas configuré.',
+      });
+    }
+
+    const report = request.body?.report || {};
+    const channel = await client.channels.fetch(config.reportsChannelId);
+
+    if (!channel?.isTextBased()) {
+      return response.status(500).json({
+        ok: false,
+        error: 'Salon de rapports introuvable.',
+      });
+    }
+
+    const embed = new EmbedBuilder()
+      .setAuthor(brandAuthor())
+      .setTitle(`📊 Bilan du ${cleanText(request.body?.period, '', 40)}`)
+      .setColor(0x2f6b42)
+      .addFields(
+        { name: 'Recettes', value: formatMoney(report.revenue), inline: true },
+        { name: 'Dépenses', value: formatMoney(report.expenses), inline: true },
+        { name: 'Résultat', value: formatMoney(report.result), inline: true },
+        { name: 'Commandes', value: String(report.orders || 0), inline: true },
+      )
+      .setFooter({
+        text: `${config.companyName} • Rapport journalier`,
+      })
+      .setTimestamp();
+
+    if (config.logoUrl) embed.setThumbnail(config.logoUrl);
+
+    const message = await channel.send({
+      embeds: [embed],
+      allowedMentions: { parse: [] },
+    });
+
+    return response.status(201).json({
+      ok: true,
+      messageId: message.id,
+    });
+  } catch (error) {
+    console.error('Erreur rapport journalier :', error);
+    return response.status(500).json({
+      ok: false,
+      error: 'Impossible de publier le rapport.',
     });
   }
 });
