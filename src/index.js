@@ -79,47 +79,55 @@ function validateOrder(body) {
   return null;
 }
 
-function buildButtons(orderNumber, status = 'waiting') {
+function buildButtons(orderNumber, status = 'waiting', employeeId = '') {
   const terminal = ['completed', 'cancelled'].includes(status);
+  const suffix = employeeId ? `:${employeeId}` : '';
 
   const claim = new ButtonBuilder()
-    .setCustomId(`order:claim:${orderNumber}`)
+    .setCustomId(`order:claim:${orderNumber}${suffix}`)
     .setLabel('Prendre en charge')
     .setEmoji('👨‍🍳')
     .setStyle(ButtonStyle.Primary)
     .setDisabled(status !== 'waiting');
 
   const preparing = new ButtonBuilder()
-    .setCustomId(`order:preparing:${orderNumber}`)
+    .setCustomId(`order:preparing:${orderNumber}${suffix}`)
     .setLabel('En préparation')
     .setEmoji('🍳')
     .setStyle(ButtonStyle.Secondary)
     .setDisabled(!['claimed', 'preparing'].includes(status) || terminal);
 
   const delivery = new ButtonBuilder()
-    .setCustomId(`order:delivery:${orderNumber}`)
+    .setCustomId(`order:delivery:${orderNumber}${suffix}`)
     .setLabel('En livraison')
     .setEmoji('🚗')
     .setStyle(ButtonStyle.Primary)
     .setDisabled(!['claimed', 'preparing', 'delivery'].includes(status) || terminal);
 
   const completed = new ButtonBuilder()
-    .setCustomId(`order:completed:${orderNumber}`)
+    .setCustomId(`order:completed:${orderNumber}${suffix}`)
     .setLabel('Effectuée')
     .setEmoji('✅')
     .setStyle(ButtonStyle.Success)
     .setDisabled(!['claimed', 'preparing', 'delivery'].includes(status) || terminal);
 
   const cancelled = new ButtonBuilder()
-    .setCustomId(`order:cancelled:${orderNumber}`)
+    .setCustomId(`order:cancelled:${orderNumber}${suffix}`)
     .setLabel('Annuler')
-    .setEmoji('❌')
+    .setEmoji('✖️')
     .setStyle(ButtonStyle.Danger)
     .setDisabled(terminal);
 
-  return [new ActionRowBuilder().addComponents(claim, preparing, delivery, completed, cancelled)];
+  return [
+    new ActionRowBuilder().addComponents(
+      claim,
+      preparing,
+      delivery,
+      completed,
+      cancelled,
+    ),
+  ];
 }
-
 
 function brandAuthor() {
   const author = { name: config.companyName };
@@ -151,68 +159,57 @@ function buildOrderEmbed(order) {
         .slice(0, 20)
         .map(
           (item) =>
-            `**${item.quantity} × ${item.name}**\n${formatMoney(
+            `**${item.quantity} × ${item.name}** — ${formatMoney(
               item.quantity * item.price,
             )}`,
         )
-        .join('\n\n')
-        .slice(0, 4000)
+        .join('\n')
+        .slice(0, 3900)
     : 'Aucun article renseigné.';
 
   const isProfessional = order.customerType === 'professional';
+
   const embed = new EmbedBuilder()
     .setAuthor(brandAuthor())
-    .setTitle(`Commande ${cleanText(order.orderNumber, 'Inconnue', 60)}`)
-    .setDescription(itemsText)
+    .setTitle(`🍕 Commande ${cleanText(order.orderNumber, 'Inconnue', 60)}`)
+    .setDescription(`### Détail de la commande\n${itemsText}`)
     .setColor(config.brandColor)
     .addFields(
       {
-        name: 'Type de commande',
-        value: isProfessional
-          ? `Commande entreprise\n${safeField(order.companyName)}`
-          : 'Commande citoyen',
-        inline: true,
-      },
-      {
-        name: 'Client',
-        value: safeField(order.customerName),
-        inline: true,
-      },
-      {
-        name: 'Montant',
-        value: `**${formatMoney(order.total)}**`,
-        inline: true,
-      },
-      {
-        name: 'Contact',
+        name: '🧾 Informations',
         value:
-          `Discord : ${safeField(order.discordUsername)}\n` +
-          `Téléphone RP : ${safeField(order.phone)}`,
+          `**Type :** ${
+            isProfessional ? 'Entreprise' : 'Citoyen'
+          }\n` +
+          (isProfessional
+            ? `**Entreprise :** ${safeField(order.companyName)}\n`
+            : '') +
+          `**Montant :** ${formatMoney(order.total)}`,
         inline: true,
       },
       {
-        name: 'Retrait / livraison',
+        name: '👤 Client',
         value:
-          `${safeField(order.orderType)}\n` +
-          `${safeField(order.requestedDate)} à ${safeField(
-            order.requestedTime,
-          )}`,
+          `**Nom :** ${safeField(order.customerName)}\n` +
+          `**Discord :** ${safeField(order.discordUsername)}\n` +
+          `**Téléphone RP :** ${safeField(order.phone)}`,
         inline: true,
       },
       {
-        name: 'Adresse RP',
-        value: safeField(order.address),
-        inline: true,
-      },
-      {
-        name: 'Suivi',
-        value: 'En attente de prise en charge',
+        name: '📦 Retrait / livraison',
+        value:
+          `**Mode :** ${safeField(order.orderType)}\n` +
+          `**Prévu le :** ${safeField(order.requestedDate)} à ` +
+          `${safeField(order.requestedTime)}\n` +
+          `**Adresse RP :** ${safeField(order.address)}`,
         inline: false,
       },
       {
-        name: 'Employé en charge',
-        value: 'Aucun',
-        inline: true,
+        name: '📍 Suivi de la commande',
+        value:
+          '**Statut :** En attente de prise en charge\n' +
+          '**Employé :** Aucun',
+        inline: false,
       },
     )
     .setFooter({
@@ -221,13 +218,61 @@ function buildOrderEmbed(order) {
     .setTimestamp();
 
   const notes = cleanText(order.notes, '', 900);
-  if (notes) embed.addFields({ name: 'Commentaire du client', value: notes });
+  if (notes) {
+    embed.addFields({
+      name: '💬 Commentaire du client',
+      value: notes,
+      inline: false,
+    });
+  }
+
   if (config.logoUrl) embed.setThumbnail(config.logoUrl);
   return embed;
 }
-
 function getFieldValue(embed, fieldName) {
   return embed.fields?.find((entry) => entry.name === fieldName)?.value || '';
+}
+
+
+function getOrderDataFromEmbed(embed) {
+  const information = getFieldValue(embed, '🧾 Informations');
+  const client = getFieldValue(embed, '👤 Client');
+  const delivery = getFieldValue(embed, '📦 Retrait / livraison');
+  const tracking = getFieldValue(embed, '📍 Suivi de la commande');
+
+  const read = (text, label) => {
+    const pattern = new RegExp(
+      `\\*\\*${label} :\\*\\*\\s*([^\\n]+)`,
+      'i',
+    );
+    return String(text || '').match(pattern)?.[1]?.trim() || '';
+  };
+
+  const planned = read(delivery, 'Prévu le');
+
+  return {
+    type: read(information, 'Type'),
+    company: read(information, 'Entreprise'),
+    total: read(information, 'Montant'),
+    customer: read(client, 'Nom'),
+    discord: read(client, 'Discord'),
+    phone: read(client, 'Téléphone RP'),
+    mode: read(delivery, 'Mode'),
+    date: planned.split(' à ')[0] || '',
+    time: planned.split(' à ')[1] || '',
+    address: read(delivery, 'Adresse RP'),
+    status: read(tracking, 'Statut'),
+    employee: read(tracking, 'Employé'),
+  };
+}
+
+function updateTrackingField(embed, status, employeeName) {
+  replaceField(
+    embed,
+    '📍 Suivi de la commande',
+    `**Statut :** ${status}\n**Employé :** ${employeeName}`,
+    false,
+  );
 }
 
 function replaceField(embed, name, value, inline = true) {
@@ -253,13 +298,21 @@ function hasEmployeeAccess(interaction) {
 }
 
 function getCurrentStatus(embed) {
-  const value = getFieldValue(embed, 'Suivi') || getFieldValue(embed, 'Suivi');
-  return Object.entries(STATUS).find(([, status]) => value.includes(status.label))?.[0] || 'waiting';
+  const data = getOrderDataFromEmbed(embed);
+  const value =
+    data.status ||
+    getFieldValue(embed, 'Suivi') ||
+    getFieldValue(embed, '📌 Statut');
+
+  return (
+    Object.entries(STATUS).find(([, status]) =>
+      String(value).includes(status.label),
+    )?.[0] || 'waiting'
+  );
 }
 
-function getAssignedEmployeeId(embed) {
-  const footerText = embed.footer?.text || '';
-  return footerText.match(/employee_id:(\d+)/)?.[1] || '';
+function getAssignedEmployeeId(interaction) {
+  return interaction.customId.split(':')[3] || '';
 }
 
 function getEmployeeDisplayName(interaction) {
@@ -425,16 +478,16 @@ function parseOrderItemsFromEmbed(embed) {
 
   return description
     .split(/\r?\n/)
-    .map(line => line.trim())
-    .filter(Boolean)
-    .map(line => {
+    .map((line) => line.trim())
+    .filter((line) =>
+      /^\*\*\d+\s+×\s+.+\*\*\s+—\s+/.test(line),
+    )
+    .map((line) => {
       const match = line.match(
-        /^•\s+\*\*(\d+)\s+×\s+(.+?)\*\*\s+—\s+(.+)$/,
+        /^\*\*(\d+)\s+×\s+(.+?)\*\*\s+—\s+(.+)$/,
       );
 
-      if (!match) {
-        return null;
-      }
+      if (!match) return null;
 
       const quantity = Math.max(1, Number(match[1]) || 1);
       const lineTotal = parseMoneyValue(match[3]);
@@ -442,7 +495,7 @@ function parseOrderItemsFromEmbed(embed) {
       return {
         name: cleanText(match[2], 'Produit', 100),
         quantity,
-        price: quantity > 0 ? lineTotal / quantity : lineTotal,
+        price: lineTotal / quantity,
         lineTotal,
       };
     })
@@ -451,7 +504,9 @@ function parseOrderItemsFromEmbed(embed) {
 
 function extractOrderNumber(embed) {
   const title = String(embed.title || '');
-  return title.match(/Commande\s+#(.+)$/i)?.[1]?.trim() || '';
+  return (
+    title.match(/Commande\s+#?([A-Za-z0-9_-]+)/i)?.[1]?.trim() || ''
+  );
 }
 
 async function syncCompletedOrderToAccounting(interaction, embed, employeeName) {
@@ -464,24 +519,46 @@ async function syncCompletedOrderToAccounting(interaction, embed, employeeName) 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), 15_000);
 
+  const data = getOrderDataFromEmbed(embed);
+  const orderNumber = extractOrderNumber(embed);
+
+  if (!orderNumber) {
+    throw new Error(
+      'Numéro de commande introuvable dans le message Discord.',
+    );
+  }
+
   const payload = {
     action: 'complete_order',
     secret: config.appsScriptCallbackSecret,
     order: {
-      orderNumber: extractOrderNumber(embed),
+      orderNumber,
       completedAt: new Date().toISOString(),
-      customerType: getFieldValue(embed, '🏷️ Type'),
-      companyName: getFieldValue(embed, '🏢 Entreprise'),
-      customerName: getFieldValue(embed, '👤 Client'),
-      discordUsername: getFieldValue(embed, '💬 Discord'),
-      phone: getFieldValue(embed, '📞 Téléphone RP'),
-      orderType: getFieldValue(embed, '📦 Mode'),
-      requestedDate: getFieldValue(embed, '📅 Date souhaitée'),
-      requestedTime: getFieldValue(embed, '🕒 Heure souhaitée'),
-      address: getFieldValue(embed, '📍 Adresse RP'),
+      customerType:
+        data.type || getFieldValue(embed, '🏷️ Type'),
+      companyName:
+        data.company || getFieldValue(embed, '🏢 Entreprise'),
+      customerName:
+        data.customer || getFieldValue(embed, '👤 Client'),
+      discordUsername:
+        data.discord || getFieldValue(embed, '💬 Discord'),
+      phone:
+        data.phone || getFieldValue(embed, '📞 Téléphone RP'),
+      orderType:
+        data.mode || getFieldValue(embed, '📦 Mode'),
+      requestedDate:
+        data.date || getFieldValue(embed, '📅 Date souhaitée'),
+      requestedTime:
+        data.time || getFieldValue(embed, '🕒 Heure souhaitée'),
+      address:
+        data.address || getFieldValue(embed, '📍 Adresse RP'),
       employeeName,
-      total: parseMoneyValue(getFieldValue(embed, '💵 Total')),
-      notes: getFieldValue(embed, '📝 Commentaire'),
+      total: parseMoneyValue(
+        data.total || getFieldValue(embed, '💵 Total'),
+      ),
+      notes:
+        getFieldValue(embed, '💬 Commentaire du client') ||
+        getFieldValue(embed, '📝 Commentaire'),
       items: parseOrderItemsFromEmbed(embed),
       discordMessageId: interaction.message.id,
       discordChannelId: interaction.channelId,
@@ -544,10 +621,10 @@ async function archiveCompletedOrder(interaction, embed) {
 
   const archivedEmbed = EmbedBuilder.from(embed)
     .setAuthor(brandAuthor())
-    .setTitle(`${embed.data.title || 'Commande'} — Archivée`)
+    .setTitle(`${String(embed.data.title || 'Commande').replace(/^🍕\s*/, '')} — Terminée`)
     .setColor(0x2f6b42)
     .setFooter({
-      text: `${config.companyName} • Commande finalisée et archivée`,
+      text: `${config.companyName} • Archive des commandes`,
     })
     .setTimestamp();
 
@@ -665,7 +742,7 @@ client.on('interactionCreate', async (interaction) => {
     }
 
     const currentStatus = getCurrentStatus(currentEmbedData);
-    const assignedEmployeeId = getAssignedEmployeeId(currentEmbedData);
+    const assignedEmployeeId = getAssignedEmployeeId(interaction);
 
     if (['completed', 'cancelled'].includes(currentStatus)) {
       await interaction.reply({ content: 'Cette commande est déjà clôturée.', ephemeral: true });
@@ -712,17 +789,16 @@ client.on('interactionCreate', async (interaction) => {
     const employeeId = assignedEmployeeId || interaction.user.id;
     const employeeName = getEmployeeDisplayName(interaction);
 
-    replaceField(embed, 'Suivi', nextStatus.label, true);
-    replaceField(embed, 'Employé en charge', employeeName, true);
+    updateTrackingField(embed, nextStatus.label, employeeName);
     replaceField(
       embed,
-      'Dernière mise à jour',
-      `${nextStatus.emoji} ${nextStatus.label} par ${employeeName}`,
+      '🕒 Dernière mise à jour',
+      `${nextStatus.emoji} **${nextStatus.label}** par ${employeeName}`,
       false,
     );
 
     embed.setFooter({
-      text: `Roxwood Pizzeria • Gestion des commandes • employee_id:${employeeId}`,
+      text: `${config.companyName} • Gestion des commandes`,
     });
 
     if (nextStatusKey === 'completed') {
@@ -752,7 +828,7 @@ client.on('interactionCreate', async (interaction) => {
 
       await interaction.editReply({
         embeds: [embed],
-        components: buildButtons(orderNumber, nextStatusKey),
+        components: buildButtons(orderNumber, nextStatusKey, employeeId),
         allowedMentions: { parse: [] },
       });
 
@@ -773,7 +849,7 @@ client.on('interactionCreate', async (interaction) => {
 
     await interaction.update({
       embeds: [embed],
-      components: buildButtons(orderNumber, nextStatusKey),
+      components: buildButtons(orderNumber, nextStatusKey, employeeId),
       allowedMentions: { parse: [] },
     });
   } catch (error) {
