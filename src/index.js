@@ -650,7 +650,19 @@ async function archiveCompletedOrder(interaction, embed) {
     allowedMentions: { parse: [] },
   });
 
-  await interaction.message.delete();
+  try {
+    await interaction.deleteReply();
+  } catch (deleteError) {
+    const errorCode = Number(deleteError?.code || 0);
+
+    if (errorCode !== 10008) {
+      console.warn(
+        'Archive créée, mais suppression du message original impossible :',
+        deleteError,
+      );
+    }
+  }
+
   return true;
 }
 
