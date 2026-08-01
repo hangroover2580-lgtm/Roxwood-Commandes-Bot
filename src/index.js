@@ -23,6 +23,7 @@ const config = {
   apiSecret: process.env.API_SECRET.trim(),
   employeeRoleId: process.env.EMPLOYEE_ROLE_ID?.trim() || '',
   archiveChannelId: process.env.ARCHIVE_CHANNEL_ID?.trim() || '',
+  patchNotesChannelId: process.env.PATCH_NOTES_CHANNEL_ID?.trim() || '',
   port: Number(process.env.PORT || 3000),
 };
 
@@ -194,6 +195,67 @@ function getEmployeeDisplayName(interaction) {
   );
 }
 
+
+function normalizePatchLines(value, prefix) {
+  const lines = String(value || '')
+    .split(/\r?\n/)
+    .map(line => line.trim())
+    .filter(Boolean)
+    .slice(0, 20);
+
+  if (lines.length === 0) {
+    return '';
+  }
+
+  return lines
+    .map(line => `${prefix} ${line}`)
+    .join('\n')
+    .slice(0, 1000);
+}
+
+function buildPatchNoteEmbed(patch) {
+  const embed = new EmbedBuilder()
+    .setTitle(`🍕 Roxwood Pizzeria — ${cleanText(patch.version, 'Nouvelle version', 40)}`)
+    .setDescription(`**${cleanText(patch.title, 'Mise à jour', 120)}**`)
+    .setColor(0xB51F24)
+    .addFields(
+      {
+        name: '🏷️ Catégorie',
+        value: cleanText(patch.category, 'Mise à jour globale', 60),
+        inline: true,
+      },
+      {
+        name: '👤 Publié par',
+        value: cleanText(patch.author, 'Administration', 80),
+        inline: true,
+      },
+    )
+    .setFooter({
+      text: 'Roxwood Pizzeria • Patch Notes officielles',
+    })
+    .setTimestamp(
+      patch.publishedAt ? new Date(patch.publishedAt) : new Date(),
+    );
+
+  const newFeatures = normalizePatchLines(patch.newFeatures, '✨');
+  const fixes = normalizePatchLines(patch.fixes, '🔧');
+  const improvements = normalizePatchLines(patch.improvements, '🚀');
+
+  if (newFeatures) {
+    embed.addFields({ name: 'Nouveautés', value: newFeatures });
+  }
+
+  if (fixes) {
+    embed.addFields({ name: 'Correctifs', value: fixes });
+  }
+
+  if (improvements) {
+    embed.addFields({ name: 'Améliorations', value: improvements });
+  }
+
+  return embed;
+}
+
 app.get('/', (_request, response) => {
   response.status(200).json({
     ok: true,
@@ -291,6 +353,69 @@ async function archiveCompletedOrder(interaction, embed) {
   await interaction.message.delete();
   return true;
 }
+
+
+app.post('/api/patch-notes', async (request, response) => {
+  try {
+    if ((request.get('authorization') || '') !== `Bearer ${config.apiSecret}`) {
+      return response.status(401).json({
+        ok: false,
+        error: 'Accès refusé.',
+      });
+    }
+
+    if (!config.patchNotesChannelId) {
+      return response.status(500).json({
+        ok: false,
+        error: 'PATCH_NOTES_CHANNEL_ID n’est pas configuré.',
+      });
+    }
+
+    if (!client.isReady()) {
+      return response.status(503).json({
+        ok: false,
+        error: 'Le bot Discord n’est pas encore prêt.',
+      });
+    }
+
+    const version = cleanText(request.body?.version, '', 40);
+    const title = cleanText(request.body?.title, '', 120);
+
+    if (!version || !title) {
+      return response.status(400).json({
+        ok: false,
+        error: 'La version et le titre sont obligatoires.',
+      });
+    }
+
+    const channel = await client.channels.fetch(config.patchNotesChannelId);
+
+    if (!channel?.isTextBased()) {
+      return response.status(500).json({
+        ok: false,
+        error: 'Le salon de patch notes est introuvable.',
+      });
+    }
+
+    const message = await channel.send({
+      embeds: [buildPatchNoteEmbed(request.body)],
+      allowedMentions: { parse: [] },
+    });
+
+    return response.status(201).json({
+      ok: true,
+      messageId: message.id,
+      patchId: cleanText(request.body?.patchId, '', 80),
+    });
+  } catch (error) {
+    console.error('Erreur publication patch note :', error);
+
+    return response.status(500).json({
+      ok: false,
+      error: 'Erreur interne lors de la publication de la patch note.',
+    });
+  }
+});
 
 client.once('ready', (readyClient) => {
   console.log(`Bot connecté : ${readyClient.user.tag}`);
