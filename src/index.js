@@ -503,10 +503,17 @@ function parseOrderItemsFromEmbed(embed) {
 }
 
 function extractOrderNumber(embed) {
-  const title = String(embed.title || '');
-  return (
-    title.match(/Commande\s+#?([A-Za-z0-9_-]+)/i)?.[1]?.trim() || ''
+  const title = String(
+    embed?.data?.title ||
+    embed?.title ||
+    ''
   );
+
+  const match = title.match(
+    /Commande\s+#?([A-Za-z0-9_-]+)/i,
+  );
+
+  return match?.[1]?.trim() || '';
 }
 
 async function syncCompletedOrderToAccounting(interaction, embed, employeeName) {
